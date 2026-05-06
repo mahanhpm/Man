@@ -1,0 +1,122 @@
+const AUTH_KEY = "name";
+
+const SKIP_HEADERS = {
+  "content-length": 1, "proxy-authorization": 1, te: 1,
+  host: 1, connection: 1, "transfer-encoding": 1,
+  "proxy-connection": 1, "priority": 1,
+};
+
+function doPost(e) {
+  try {
+    var req = JSON.parse(e.postData.contents);
+    if (req.k !== AUTH_KEY) return _json({ e: "unauthorized" });
+    if (Array.isArray(req.q)) return _doBatch(req.q);
+    return _doSingle(req);
+  } catch (err) {
+    return _json({ e: String(err) });
+  }
+}
+
+function _doSingle(req) {
+  if (!req.u || typeof req.u !== "string" || !req.u.match(/^https?:\/\//i)) {
+    return _json({ e: "bad url" });
+  }
+  var opts = _buildOpts(req);
+  var resp = UrlFetchApp.fetch(req.u, opts);
+  var out = {};
+  out.b = Utilities.base64Encode(resp.getContent());
+  out.h = _respHeaders(resp);
+  out.s = resp.getResponseCode();
+  return _json(out);
+}
+
+function _doBatch(items) {
+  var fetchArgs = [];
+  var errorMap = {};
+
+  for (var i = 0; i < items.length; i++) {
+    var item = items[i];
+    if (!item.u || typeof item.u !== "string" || !item.u.match(/^https?:\/\//i)) {
+      errorMap[i] = "bad url";
+      continue;
+    }
+    var opts = _buildOpts(item);
+    opts.url = item.u;
+    fetchArgs.push({ _o: opts, _i: i });
+  }
+
+  var responses = [];
+  if (fetchArgs.length > 0) {
+    responses = UrlFetchApp.fetchAll(fetchArgs.map(function(x) { return x._o; }));
+  }
+
+  var results = [];
+  var rIdx = 0;
+  for (var i = 0; i < items.length; i++) {
+    if (errorMap.hasOwnProperty(i)) {
+      results.push({ e: errorMap[i] });
+    } else {
+      var resp = responses[rIdx++];
+      var entry = {};
+      entry.b = Utilities.base64Encode(resp.getContent());
+      entry.h = _respHeaders(resp);
+      entry.s = resp.getResponseCode();
+      results.push(entry);
+    }
+  }
+  return _json({ q: results });
+}
+
+function _buildOpts(req) {
+  var opts = {
+    validateHttpsCertificates: true,
+    escaping: false,
+    followRedirects: req.r !== false,
+    muteHttpExceptions: true,
+    method: (req.m || "GET").toLowerCase(),
+  };
+  if (req.h && typeof req.h === "object") {
+    var headers = {};
+    var keys = Object.keys(req.h).sort();
+    for (var idx = 0; idx < keys.length; idx++) {
+      var k = keys[idx];
+      if (req.h.hasOwnProperty(k) && !SKIP_HEADERS[k.toLowerCase()]) {
+        headers[k] = req.h[k];
+      }
+    }
+    opts.headers = headers;
+  }
+  if (req.b) {
+    opts.payload = Utilities.base64Decode(req.b);
+    if (req.ct) opts.contentType = req.ct;
+  }
+  return opts;
+}
+
+function _respHeaders(resp) {
+  try {
+    if (typeof resp.getAllHeaders === "function") {
+      var h = resp.getAllHeaders();
+      var sorted = {};
+      Object.keys(h).sort().forEach(function(k) { sorted[k] = h[k]; });
+      return sorted;
+    }
+  } catch (err) {}
+  var h2 = resp.getHeaders();
+  var sorted2 = {};
+  Object.keys(h2).sort().forEach(function(k) { sorted2[k] = h2[k]; });
+  return sorted2;
+}
+
+function doGet(e) {
+  return HtmlService.createHtmlOutput(
+    "<div style='display:none'>v2</div><html><body>" +
+      "<h1>Service</h1><p>Active</p></body></html>"
+  );
+}
+
+function _json(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(
+    ContentService.MimeType.JSON
+  );
+}
